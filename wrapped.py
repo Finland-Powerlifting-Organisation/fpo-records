@@ -96,6 +96,13 @@ def is_tested(key: str) -> bool:
 	return parts[1].endswith("-D")
 
 
+def is_open_division(key: str) -> bool:
+	parts = key.split("|")
+	if len(parts) < 2:
+		return False
+	return parts[1] in {"Open", "Open-D"}
+
+
 def build_report(target_year: int, root: Path) -> Dict[str, object]:
 	records: Dict[str, float] = {}
 	total_broken = 0
@@ -103,7 +110,10 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 	location_counts: Counter[str] = Counter()
 	name_counts: Counter[str] = Counter()
 	name_counts_untested: Counter[str] = Counter()
+	name_counts_tested: Counter[str] = Counter()
 	increase_events: List[IncreaseEvent] = []
+	open_increase_events: List[IncreaseEvent] = []
+	name_increase_totals: Counter[str] = Counter()
 	total_increase = 0.0
 	files = sorted_event_files(root)
 
@@ -115,6 +125,8 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 				total_broken += 1
 				location_counts[row.location] += 1
 				name_counts[row.name] += 1
+				if is_tested(row.key):
+					name_counts_tested[row.name] += 1
 				if not is_tested(row.key):
 					name_counts_untested[row.name] += 1
 				if prev_weight is None:
@@ -122,6 +134,7 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 				else:
 					delta = row.weight - prev_weight
 					total_increase += delta
+					name_increase_totals[row.name] += delta
 					increase_events.append(
 						IncreaseEvent(
 							name=row.name,
@@ -133,6 +146,18 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 							source_file=path.name,
 						)
 					)
+					if is_open_division(row.key):
+						open_increase_events.append(
+							IncreaseEvent(
+								name=row.name,
+								key=row.key,
+								location=row.location,
+								previous=prev_weight,
+								new=row.weight,
+								delta=delta,
+								source_file=path.name,
+							)
+						)
 			if is_new_best:
 				records[row.key] = row.weight
 
@@ -142,7 +167,10 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 		"location_counts": location_counts,
 		"name_counts": name_counts,
 		"name_counts_untested": name_counts_untested,
+		"name_counts_tested": name_counts_tested,
 		"increase_events": increase_events,
+		"open_increase_events": open_increase_events,
+		"name_increase_totals": name_increase_totals,
 		"total_increase": total_increase,
 	}
 
@@ -151,6 +179,15 @@ def format_counter(counter: Counter[str], title: str, limit: int = 10) -> str:
 	lines = [title]
 	for idx, (name, count) in enumerate(counter.most_common(limit), start=1):
 		lines.append(f"{idx:2d}. {name} — {count}")
+	if len(lines) == 1:
+		lines.append("   (no data)")
+	return "\n".join(lines)
+
+
+def format_weight_counter(counter: Counter[str], title: str, limit: int = 10) -> str:
+	lines = [title]
+	for idx, (name, total) in enumerate(counter.most_common(limit), start=1):
+		lines.append(f"{idx:2d}. {name} — {total:.1f} kg")
 	if len(lines) == 1:
 		lines.append("   (no data)")
 	return "\n".join(lines)
@@ -173,13 +210,28 @@ def format_increases(events: List[IncreaseEvent], limit: int = 10) -> str:
 	return "\n".join(lines)
 
 
+def format_open_glowups(events: List[IncreaseEvent], limit: int = 10) -> str:
+	if not events:
+		return "Open division glow-ups (no qualifying improvements)"
+	sorted_events = sorted(
+		events,
+		key=lambda item: (item.delta, item.new, item.name),
+		reverse=True,
+	)
+	lines = ["Open division glow-ups (tested + untested, excluding brand new records)"]
+	for idx, event in enumerate(sorted_events[:limit], start=1):
+		lines.append(
+			f"{idx:2d}. {event.name} ({event.key}) +{event.delta:.1f} "
+			f"→ {event.new:.1f} at {event.location} [{event.source_file}]"
+		)
+	return "\n".join(lines)
+
+
 def suggest_extra_stats(report: Dict[str, object]) -> List[str]:
 	total_broken = report["total_broken"]
 	new_records = report["new_records"]
-	total_increase = report["total_increase"]
 	unique_people = len(report["name_counts"])
 	extra = [
-		f"Total kg added to existing records: {total_increase:.1f}",
 		f"Fresh records set from scratch: {new_records}",
 		f"Distinct lifters hitting the board: {unique_people}",
 	]
@@ -190,14 +242,21 @@ def print_report(year: int, report: Dict[str, object]) -> None:
 	print(f"FPO Records Wrapped {year}")
 	print("=" * 40)
 	print(f"Records broken (all divisions): {report['total_broken']}")
+	print(f"Total kg added to existing records: {report['total_increase']:.1f} kg")
 	print()
 	print(format_counter(report["location_counts"], "Where the magic happened (top 10)"))
 	print()
 	print(format_counter(report["name_counts"], "All-time hitters (tested + untested, top 10)"))
 	print()
+	print(format_counter(report["name_counts_tested"], "Record rake (tested only, top 10)"))
+	print()
 	print(format_counter(report["name_counts_untested"], "Untested spotlight (top 10)"))
 	print()
 	print(format_increases(report["increase_events"]))
+	print()
+	print(format_open_glowups(report["open_increase_events"]))
+	print()
+	print(format_weight_counter(report["name_increase_totals"], "Total kg added leaderboard (excluding brand new records)"))
 	print()
 	for stat in suggest_extra_stats(report):
 		print(f"- {stat}")
