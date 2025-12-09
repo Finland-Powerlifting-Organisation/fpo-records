@@ -175,7 +175,7 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 	}
 
 
-def format_counter(counter: Counter[str], title: str, limit: int = 10) -> str:
+def format_counter(counter: Counter[str], title: str, limit: int = 20) -> str:
 	lines = [title]
 	for idx, (name, count) in enumerate(counter.most_common(limit), start=1):
 		lines.append(f"{idx:2d}. {name} — {count}")
@@ -227,6 +227,58 @@ def format_open_glowups(events: List[IncreaseEvent], limit: int = 10) -> str:
 	return "\n".join(lines)
 
 
+def format_percent_glowups(events: List[IncreaseEvent], limit: int = 10) -> str:
+	lines = ["Biggest glow-ups by % (excluding brand new records)"]
+	percent_events = [
+		(
+			(event.delta / event.previous * 100) if event.previous > 0 else 0.0,
+			event,
+		)
+		for event in events
+		if event.previous > 0
+	]
+	if not percent_events:
+		lines.append("   (no data)")
+		return "\n".join(lines)
+	sorted_events = sorted(
+		percent_events,
+		key=lambda item: (item[0], item[1].new, item[1].name),
+		reverse=True,
+	)
+	for idx, (pct, event) in enumerate(sorted_events[:limit], start=1):
+		lines.append(
+			f"{idx:2d}. {event.name} ({event.key}) +{pct:.1f}% "
+			f"→ {event.new:.1f} at {event.location} [{event.source_file}]"
+		)
+	return "\n".join(lines)
+
+
+def format_percent_open_glowups(events: List[IncreaseEvent], limit: int = 10) -> str:
+	lines = ["Open division glow-ups by % (tested + untested, excluding brand new records)"]
+	percent_events = [
+		(
+			(event.delta / event.previous * 100) if event.previous > 0 else 0.0,
+			event,
+		)
+		for event in events
+		if event.previous > 0
+	]
+	if not percent_events:
+		lines.append("   (no data)")
+		return "\n".join(lines)
+	sorted_events = sorted(
+		percent_events,
+		key=lambda item: (item[0], item[1].new, item[1].name),
+		reverse=True,
+	)
+	for idx, (pct, event) in enumerate(sorted_events[:limit], start=1):
+		lines.append(
+			f"{idx:2d}. {event.name} ({event.key}) +{pct:.1f}% "
+			f"→ {event.new:.1f} at {event.location} [{event.source_file}]"
+		)
+	return "\n".join(lines)
+
+
 def suggest_extra_stats(report: Dict[str, object]) -> List[str]:
 	total_broken = report["total_broken"]
 	new_records = report["new_records"]
@@ -243,6 +295,8 @@ def print_report(year: int, report: Dict[str, object]) -> None:
 	print("=" * 40)
 	print(f"Records broken (all divisions): {report['total_broken']}")
 	print(f"Total kg added to existing records: {report['total_increase']:.1f} kg")
+	for stat in suggest_extra_stats(report):
+		print(stat)
 	print()
 	print(format_counter(report["location_counts"], "Where the magic happened (top 10)"))
 	print()
@@ -256,10 +310,11 @@ def print_report(year: int, report: Dict[str, object]) -> None:
 	print()
 	print(format_open_glowups(report["open_increase_events"]))
 	print()
-	print(format_weight_counter(report["name_increase_totals"], "Total kg added leaderboard (excluding brand new records)"))
+	print(format_percent_glowups(report["increase_events"]))
 	print()
-	for stat in suggest_extra_stats(report):
-		print(f"- {stat}")
+	print(format_percent_open_glowups(report["open_increase_events"]))
+	print()
+	print(format_weight_counter(report["name_increase_totals"], "Total kg added leaderboard (excluding brand new records)"))
 
 
 def main() -> int:
