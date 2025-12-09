@@ -5,6 +5,7 @@ import csv
 import re
 import sys
 from collections import Counter
+from datetime import date
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -29,6 +30,10 @@ class IncreaseEvent:
 	previous: float
 	new: float
 	delta: float
+	previous_date: date
+	current_date: date
+	previous_has_exact_date: bool
+	previous_source_file: str
 	source_file: str
 
 
@@ -58,6 +63,12 @@ def parse_filename(path: Path) -> Optional[Tuple[int, int, int]]:
 	month = int(match.group(2) or 0)
 	day = int(match.group(3) or 0)
 	return year, month, day
+
+
+def make_date(year: int, month: int, day: int) -> date:
+	month = month if month else 1
+	day = day if day else 1
+	return date(year, month, day)
 
 
 def sorted_event_files(root: Path) -> List[Tuple[Tuple[int, int, int], Path]]:
@@ -104,7 +115,7 @@ def is_open_division(key: str) -> bool:
 
 
 def build_report(target_year: int, root: Path) -> Dict[str, object]:
-	records: Dict[str, float] = {}
+	records: Dict[str, Tuple[float, date, str, bool]] = {}
 	total_broken = 0
 	new_records = 0
 	location_counts: Counter[str] = Counter()
@@ -117,9 +128,15 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 	total_increase = 0.0
 	files = sorted_event_files(root)
 
-	for (year, _month, _day), path in files:
+	for (year, month, day), path in files:
+		current_date = make_date(year, month, day)
+		current_has_exact_date = bool(month and day)
 		for row in read_rows(path):
-			prev_weight = records.get(row.key)
+			prev_record = records.get(row.key)
+			prev_weight = prev_record[0] if prev_record else None
+			prev_date = prev_record[1] if prev_record else None
+			prev_source_file = prev_record[2] if prev_record else ""
+			prev_has_exact_date = prev_record[3] if prev_record else False
 			is_new_best = prev_weight is None or row.weight > prev_weight
 			if is_new_best and year == target_year:
 				total_broken += 1
@@ -143,6 +160,10 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 							previous=prev_weight,
 							new=row.weight,
 							delta=delta,
+							previous_date=prev_date or current_date,
+							current_date=current_date,
+							previous_has_exact_date=prev_has_exact_date,
+							previous_source_file=prev_source_file,
 							source_file=path.name,
 						)
 					)
@@ -155,11 +176,15 @@ def build_report(target_year: int, root: Path) -> Dict[str, object]:
 								previous=prev_weight,
 								new=row.weight,
 								delta=delta,
+								previous_date=prev_date or current_date,
+								current_date=current_date,
+								previous_has_exact_date=prev_has_exact_date,
+								previous_source_file=prev_source_file,
 								source_file=path.name,
 							)
 						)
 			if is_new_best:
-				records[row.key] = row.weight
+				records[row.key] = (row.weight, current_date, path.name, current_has_exact_date)
 
 	return {
 		"total_broken": total_broken,
@@ -279,6 +304,35 @@ def format_percent_open_glowups(events: List[IncreaseEvent], limit: int = 10) ->
 	return "\n".join(lines)
 
 
+def format_oldest_broken(events: List[IncreaseEvent], limit: int = 10) -> str:
+	lines = ["Oldest records finally broken"]
+	age_events = []
+	for event in events:
+		if event.previous_date:
+			age_days = (event.current_date - event.previous_date).days
+			age_events.append((age_days, event))
+	if not age_events:
+		lines.append("   (no data)")
+		return "\n".join(lines)
+	sorted_events = sorted(
+		age_events,
+		key=lambda item: (item[0], item[1].new, item[1].name),
+		reverse=True,
+	)
+	for idx, (age_days, event) in enumerate(sorted_events[:limit], start=1):
+		if event.previous_has_exact_date:
+			age_text = f"{age_days} days"
+		else:
+			age_years = event.current_date.year - event.previous_date.year
+			age_text = f"{age_years} years"
+		lines.append(
+			f"{idx:2d}. {event.name} ({event.key}) after {age_text} "
+			f"→ {event.new:.1f} at {event.location} [{event.source_file}] "
+			f"(set on {event.previous_date.isoformat()} via {event.previous_source_file})"
+		)
+	return "\n".join(lines)
+
+
 def suggest_extra_stats(report: Dict[str, object]) -> List[str]:
 	total_broken = report["total_broken"]
 	new_records = report["new_records"]
@@ -313,6 +367,8 @@ def print_report(year: int, report: Dict[str, object]) -> None:
 	print(format_percent_glowups(report["increase_events"]))
 	print()
 	print(format_percent_open_glowups(report["open_increase_events"]))
+	print()
+	print(format_oldest_broken(report["increase_events"]))
 	print()
 	print(format_weight_counter(report["name_increase_totals"], "Total kg added leaderboard (excluding brand new records)"))
 
